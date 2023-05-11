@@ -1,0 +1,72 @@
+Работа с райд массивом.
+За основу взят образ centos/7.
+Добавляем еще один диск:
+:sata5 => {
+           :dfile => './sata5.vdi',
+           :size => 250, # Megabytes
+           :port => 5
+           }
+ Команды для работы с райд массивом описывам в тодельном файле:
+  для этого пишем команду,
+   config.vm.provision "shell", path: "make_raid.sh"
+копируем ssh ключи:  
+ mkdir -p ~root/.ssh
+ cp ~vagrant/.ssh/auth* ~root/.ssh
+ 
+установливаем дополнительные пакеты программ: 
+ yum install  mdadm smartmontools hdparm gdisk -y
+
+выводим список блочных устройств в системе:
+ lshw -short | grep disk
+
+перед сборкой райд массива зануляем  суперблоки:
+mdadm --zero-superblock --force /dev/sd{b,c,d,e,f}
+
+создаем 10 райд из черых дисков: 
+mdadm --create --verbose /dev/md0 -l 10 -n 4 /dev/sd{b,c,d,e}
+
+проверяем результат сборки райд массива:
+cat /proc/mdstat
+
+если создание массива прошло успешно, создадим файл mdadm.conf:
+mkdir /etc/mdadm
+echo "DEVICE partitions" > /etc/mdadm/mdadm.conf
+mdadm --detail --scan --verbose | awk '/ARRAY/ {print}' >> /etc/mdadm/mdadm.conf
+
+сломаем райд, пометив диск /dev/sde как неисправный:
+mdadm /dev/md0 --fail /dev/sde
+
+затем удалим диск:
+mdadm /dev/md0 --remove /dev/sde
+
+проверим результат:
+cat /proc/mdstat
+в райде должно остаться 3 диска...
+
+починим райд, добавим диск /dev/sdf...
+mdadm /dev/md0 --add /dev/sdf
+после стадии ребилдинга, массив должен собраться.
+
+ 
+Создадим таблицу GPT на райд массиве /dev/md0 при помощи утилиты Parted: 
+parted -s /dev/md0 mklabel gpt
+и создадим 4 одинаковых раздела:
+parted /dev/md0 mkpart primary ext4 0% 25%
+parted /dev/md0 mkpart primary ext4 25% 50%
+parted /dev/md0 mkpart primary ext4 50% 75%
+parted /dev/md0 mkpart primary ext4 75% 100%
+
+
+создаем на этих разделах файловую систему ext4:
+for i in $(seq 1 4); do sudo mkfs.ext4 /dev/md0p$i; done
+
+создадим каталоги... 
+mkdir -p /raid/part{1,2,3,4}
+и  смонтируем туда разделы:
+for i in $(seq 1 4); do mount /dev/md0p$i /raid/part$i; done
+
+прверим, что получилось:
+fdisk -l
+
+проверим целостность райд массива:
+cat /proc/mdstat
